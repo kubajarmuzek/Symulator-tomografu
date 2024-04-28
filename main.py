@@ -12,6 +12,8 @@ from multiprocessing import Pool
 from PIL import Image, ImageTk
 from functools import partial
 import tkinter as tk
+from skimage.transform import resize
+from skimage import img_as_ubyte
 from tkinter import ttk, messagebox,filedialog
 
 
@@ -245,11 +247,38 @@ class TomographyApp(tk.Tk):
         self.output_image_label = ttk.Label(self.output_image_frame)
         self.output_image_label.pack()
 
+        self.sinogram_frame = ttk.LabelFrame(self.main_frame, text="Sinogram")
+        self.sinogram_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=10)
+
+        self.sinogram_image = None
+        self.sinogram_image_label = ttk.Label(self.sinogram_frame)
+        self.sinogram_image_label.pack()
+
     def load_image(self):
         file_path = filedialog.askopenfilename(title="Select Image", filetypes=[("Image files", "*.png;*.jpg;*.jpeg")])
         if file_path:
             try:
                 self.default_image = imread(file_path)
+
+                # Check if the image is in uint8 format
+                if self.default_image.dtype == np.uint8:
+                    # Convert to floating-point format for resizing
+                    self.default_image = self.default_image.astype(np.float64) / 255.0
+
+                # Resize the input image to fit within a specified maximum size
+                max_height = 400  # Set the maximum height
+                max_width = 400  # Set the maximum width
+                img_height, img_width = self.default_image.shape[:2]
+                if img_height > max_height or img_width > max_width:
+                    scale_factor = min(max_height / img_height, max_width / img_width)
+                    new_height = int(img_height * scale_factor)
+                    new_width = int(img_width * scale_factor)
+                    self.default_image = resize(self.default_image, (new_height, new_width))
+
+                # Convert back to uint8 format if necessary
+                if self.default_image.dtype == np.float64:
+                    self.default_image = img_as_ubyte(self.default_image)
+
                 self.input_image = ImageTk.PhotoImage(image=Image.fromarray(self.default_image))
                 self.input_image_label.config(image=self.input_image)
             except Exception as e:
@@ -263,62 +292,37 @@ class TomographyApp(tk.Tk):
         try:
             sinogram = radon_transform(self.default_image, 360, 360, 270, plot=False)
             sinogram_filtered = filter_sinogram(sinogram)
-            plt.figure()
-            plt.imshow(sinogram_filtered, cmap=plt.cm.Greys_r)
+            sinogram_rescaled = (sinogram_filtered * (255 / np.max(sinogram_filtered))).astype(np.uint8)  # Rescale to 0-255
+            sinogram_image = ImageTk.PhotoImage(image=Image.fromarray(sinogram_rescaled))
+            self.sinogram_image_label.config(image=sinogram_image)
+            self.sinogram_image_label.image = sinogram_image
         except Exception as e:
             messagebox.showerror("Error radon", str(e))
             return
 
         try:
             output_image = inverse_radon(self.default_image.shape, sinogram_filtered, 270, filtering=True)
-            plt.figure()
-            plt.imshow(output_image, cmap='gray')
-            plt.show()
+            padded_output_image = circle_pad(output_image)
+            output_image_tk = ImageTk.PhotoImage(image=Image.fromarray(padded_output_image))
+            self.output_image_label.config(image=output_image_tk)
+            self.output_image_label.image = output_image_tk
         except Exception as e:
             messagebox.showerror("Error inverse", str(e))
             return
-
-        padded_output_image = circle_pad(output_image)
-        self.output_image = ImageTk.PhotoImage(image=Image.fromarray(padded_output_image))
-        self.output_image_label.config(image=self.output_image)
 
     def reset_image(self):
         self.default_image = None
         self.input_image = None
         self.input_image_label.config(image=None)
+        self.sinogram_image_label.config(image=None)
         self.output_image = None
         self.output_image_label.config(image=None)
-
 
 
 def main():
     app = TomographyApp()
     app.mainloop()
-    input_image = shepp_logan_phantom()
-    pad_image = circle_pad(input_image)
 
-    number_of_scans = 360
-    number_of_detectors = pad_image.shape[0]
-    angle_range = 270
-    sinogram = radon_transform(input_image, number_of_scans, number_of_detectors, angle_range)
-
-    output = inverse_radon(input_image.shape, sinogram, angle_range, filtering=True)
-
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-
-    axs[0].imshow(input_image, cmap='gray')
-    axs[0].set_title('Input Image')
-
-    axs[1].imshow(sinogram, cmap='gray')
-    axs[1].set_title('Sinogram')
-
-    axs[2].imshow(output, cmap="gray")
-    axs[2].set_title('Reconstructed Image')
-
-    plt.show()
-
-    # Statistical Analysis
-    test_filtering(input_image, scans=100, detectors=100, angle=90)
 
 if __name__ == "__main__":
     main()
