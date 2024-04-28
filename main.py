@@ -9,52 +9,61 @@ from skimage.draw import ellipse as circle, line
 from skimage.color import gray2rgb, rgb2gray
 from scipy.fftpack import fft, ifft, fftfreq
 from multiprocessing import Pool
+from PIL import Image, ImageTk
 from functools import partial
+import tkinter as tk
+from tkinter import ttk, messagebox,filedialog
 
 
 def radon_transform(image, scan_count, detector_count, angle_range, pad=True, plot=False):
-    if pad: image = circle_pad(image)
+    if pad:
+        image = rgb2gray(image)
+        image = circle_pad(image)
+
     center = center_of(image)
     width = height = image.shape[0]
     radius = width // 2
     alphas = np.linspace(0, 180, scan_count)
     results = np.zeros((scan_count, detector_count))
+
     if plot:
         plt.figure()
         for i, alpha in enumerate(alphas):
             results[i] = single_radon_transform(detector_count, angle_range, image, radius, center, alpha)
             plt.imshow(np.swapaxes(results, 0, 1), cmap=plt.cm.Greys_r)
-            plt.show()
     else:
-        # ~core times faster
         with Pool() as pool:
-            results = pool.map(partial(single_radon_transform, detector_count, angle_range, image, radius, center),
-                               alphas)
+            results_list = pool.map(partial(single_radon_transform, detector_count, angle_range, image, radius, center),
+                                    alphas)
+        results = np.array(results_list)
+
+    if plot:
+        plt.imshow(np.swapaxes(results, 0, 1), cmap=plt.cm.Greys_r)
 
     return np.swapaxes(results, 0, 1)
 
+
 # Helper functions
 def center_pad(array, shape, *args, **kwargs):
-    """Centered padding to a given shape"""
     pad = (np.array(shape) - np.array(array.shape)) / 2
     pad = np.array([np.floor(pad), np.ceil(pad)]).T.astype(int)
     return np.pad(array, pad, *args, **kwargs)
 
 
 def circle_pad(array, *args, **kwargs):
-    """Centered padding to a square side equal to the diameter of the circle circumscribed on a rectangle"""
     w, h = array.shape
-    side = int(np.ceil(np.sqrt(w ** 2 + h ** 2)))
-    return center_pad(array, (side, side), *args, **kwargs)
+    side = max(w, h)
+    padded_array = center_pad(array, (side, side), *args, **kwargs)
+    return padded_array
+
+
 
 
 def center_of(array):
-    """Center indices of an n-dimensional array"""
     return np.floor(np.array(array.shape) / 2).astype(int)
 
 
 def rescale(array, min=0, max=1):
-    """Rescale array elements to range [min, max]"""
     res = array.astype('float32')
     res -= np.min(res)
     res /= np.max(res)
@@ -64,14 +73,12 @@ def rescale(array, min=0, max=1):
 
 
 def clip(array, min, max):
-    """Clip array elements to range [min, max]"""
     array[array < min] = min
     array[array > max] = max
     return array
 
 
 def rmse(a, b):
-    """Root mean square error"""
     a, b = rescale(a), rescale(b)
     return np.sqrt(np.mean((a - b) ** 2))
 
@@ -83,7 +90,6 @@ def cut_pad(img, height, width):
     return img[starty:starty + height, startx:startx + width]
 
 
-# Bresenham line function
 def bresenham(x0, y0, x1, y1):
     if abs(y1 - y0) > abs(x1 - x0):
         swapped = True
@@ -113,7 +119,6 @@ def single_radon_transform(detector_count, angle_range, image, radius, center, a
     result = rescale(np.array([np.sum(image[tuple(line)]) for line in lines]))
     return result
 
-# Functions to calculate emitter and detector coordinates
 def circle_points(angle_shift, angle_range, count, radius=1, center=(0, 0)):
     angles = np.linspace(0, angle_range, count) + angle_shift
     cx, cy = center
@@ -131,7 +136,6 @@ def emitter_coords(alpha, angle_range, count, radius=1, center=(0, 0)):
     return circle_points(np.radians(alpha - angle_range / 2 + 180), np.radians(angle_range), count, radius, center)[::-1]
 
 
-# Inverse radon transform (backprojection) with optional filtering
 def filter_sinogram(sinogram):
     n = sinogram.shape[0]  # number of detectors
     filter = 2 * np.abs(fftfreq(n).reshape(-1, 1))
@@ -157,7 +161,9 @@ def inverse_radon(shape, sinogram, angle_range, pad=True, plot=False, filtering=
     sinogram = np.swapaxes(sinogram, 0, 1)
 
     result = np.zeros(shape)
-    if pad: result = circle_pad(result)
+    if pad:
+        result = rgb2gray(result)
+        result = circle_pad(result)
     tmp = np.zeros(result.shape)
 
     center = center_of(result)
@@ -170,15 +176,18 @@ def inverse_radon(shape, sinogram, angle_range, pad=True, plot=False, filtering=
                                        center)
         if plot:
             plt.imshow(result, cmap=plt.cm.Greys_r)
-            plt.show()
 
     tmp[tmp == 0] = 1
     result = rescale(result / tmp)
-    if pad: result = cut_pad(result, *shape)
+    result = (result * 255).astype(np.uint8)
+
+    if pad:
+        result = cut_pad(result, result.shape[0], result.shape[1])
     return result
 
 
-# Test function
+
+
 def test(image, scans, detectors, angle_range, filtering, plot=False):
     padded = circle_pad(image)
     sinogram = radon_transform(padded, scans, detectors, angle_range, pad=False)
@@ -202,21 +211,99 @@ def test_filtering(image, scans=360, detectors=360, angle=270):
     axs[2].imshow(y2, cmap='gray')
 
 
+class TomographyApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("Tomography Simulator")
+
+        self.main_frame = ttk.Frame(self)
+        self.main_frame.pack(padx=10, pady=10)
+
+        self.input_image_frame = ttk.LabelFrame(self.main_frame, text="Input Image")
+        self.input_image_frame.grid(row=0, column=0, padx=10, pady=10)
+
+        self.default_image = None
+        self.input_image = None
+        self.input_image_label = ttk.Label(self.input_image_frame)
+        self.input_image_label.pack()
+
+        self.controls_frame = ttk.LabelFrame(self.main_frame, text="Controls")
+        self.controls_frame.grid(row=0, column=1, padx=10, pady=10)
+
+        self.load_button = ttk.Button(self.controls_frame, text="Load Image", command=self.load_image)
+        self.load_button.pack(padx=10, pady=5)
+        self.transform_button = ttk.Button(self.controls_frame, text="Transform", command=self.perform_transform)
+        self.transform_button.pack(padx=10, pady=5)
+        self.reset_button = ttk.Button(self.controls_frame, text="Reset", command=self.reset_image)
+        self.reset_button.pack(padx=10, pady=5)
+
+        self.output_image_frame = ttk.LabelFrame(self.main_frame, text="Output Image")
+        self.output_image_frame.grid(row=0, column=2, padx=10, pady=10)
+
+        self.output_image = None
+        self.output_image_label = ttk.Label(self.output_image_frame)
+        self.output_image_label.pack()
+
+    def load_image(self):
+        file_path = filedialog.askopenfilename(title="Select Image", filetypes=[("Image files", "*.png;*.jpg;*.jpeg")])
+        if file_path:
+            try:
+                self.default_image = imread(file_path)
+                self.input_image = ImageTk.PhotoImage(image=Image.fromarray(self.default_image))
+                self.input_image_label.config(image=self.input_image)
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+
+    def perform_transform(self):
+        if self.default_image is None:
+            messagebox.showerror("Error", "Please load an image first.")
+            return
+
+        try:
+            sinogram = radon_transform(self.default_image, 360, 360, 270, plot=False)
+            sinogram_filtered = filter_sinogram(sinogram)
+            plt.figure()
+            plt.imshow(sinogram_filtered, cmap=plt.cm.Greys_r)
+        except Exception as e:
+            messagebox.showerror("Error radon", str(e))
+            return
+
+        try:
+            output_image = inverse_radon(self.default_image.shape, sinogram_filtered, 270, filtering=True)
+            plt.figure()
+            plt.imshow(output_image, cmap='gray')
+            plt.show()
+        except Exception as e:
+            messagebox.showerror("Error inverse", str(e))
+            return
+
+        padded_output_image = circle_pad(output_image)
+        self.output_image = ImageTk.PhotoImage(image=Image.fromarray(padded_output_image))
+        self.output_image_label.config(image=self.output_image)
+
+    def reset_image(self):
+        self.default_image = None
+        self.input_image = None
+        self.input_image_label.config(image=None)
+        self.output_image = None
+        self.output_image_label.config(image=None)
+
+
+
 def main():
-    # Example usage
+    app = TomographyApp()
+    app.mainloop()
     input_image = shepp_logan_phantom()
     pad_image = circle_pad(input_image)
 
-    # Radon Transform
     number_of_scans = 360
     number_of_detectors = pad_image.shape[0]
     angle_range = 270
     sinogram = radon_transform(input_image, number_of_scans, number_of_detectors, angle_range)
 
-    # Inverse Radon Transform
     output = inverse_radon(input_image.shape, sinogram, angle_range, filtering=True)
 
-    # Display input image, sinogram, and output image
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
 
     axs[0].imshow(input_image, cmap='gray')
