@@ -46,7 +46,6 @@ def radon_transform(image, scan_count, detector_count, angle_range, pad=True, pl
     return np.swapaxes(results, 0, 1)
 
 
-# Helper functions
 def center_pad(array, shape, *args, **kwargs):
     pad = (np.array(shape) - np.array(array.shape)) / 2
     pad = np.array([np.floor(pad), np.ceil(pad)]).T.astype(int)
@@ -54,8 +53,8 @@ def center_pad(array, shape, *args, **kwargs):
 
 
 def circle_pad(array, *args, **kwargs):
-    if len(array.shape) == 3:  # Check if image is RGB
-        array = rgb2gray(array)  # Convert to grayscale
+    if len(array.shape) == 3:
+        array = rgb2gray(array)
     shape = array.shape
     w, h = shape
     side = max(w, h)
@@ -135,7 +134,7 @@ def emitter_coords(alpha, angle_range, count, radius=1, center=(0, 0)):
 
 
 def filter_sinogram(sinogram):
-    n = sinogram.shape[0]  # number of detectors
+    n = sinogram.shape[0]
     filter = 2 * np.abs(fftfreq(n).reshape(-1, 1))
     result = ifft(fft(sinogram, axis=0) * filter, axis=0)
     result = clip(np.real(result), 0, 1)
@@ -303,7 +302,7 @@ class TomographyApp(tk.Tk):
         self.save_button.pack(padx=10, pady=5)
 
         self.filtering_var = tk.BooleanVar()
-        self.filtering_var.set(True)  # Default value is True
+        self.filtering_var.set(True)
         self.filtering_checkbox = ttk.Checkbutton(self.controls_frame, text="Enable Filtering", variable=self.filtering_var)
         self.filtering_checkbox.pack(padx=10, pady=5)
 
@@ -445,7 +444,6 @@ class TomographyApp(tk.Tk):
             output_image_rescaled = rescale(self.output_image)
             padded_output_image = circle_pad(output_image_rescaled)
 
-            # Prompt the user to choose the destination directory
             save_path = filedialog.asksaveasfilename(
                 title="Save DICOM File",
                 filetypes=[("DICOM files", "*.dcm")],
@@ -476,14 +474,11 @@ class TomographyApp(tk.Tk):
             try:
                 self.default_image = imread(file_path)
 
-                # Check if the image is in uint8 format
                 if self.default_image.dtype == np.uint8:
-                    # Convert to floating-point format for resizing
                     self.default_image = self.default_image.astype(np.float64) / 255.0
 
-                # Resize the input image to fit within a specified maximum size
-                max_height = 400  # Set the maximum height
-                max_width = 400  # Set the maximum width
+                max_height = 400
+                max_width = 400
                 img_height, img_width = self.default_image.shape[:2]
                 if img_height > max_height or img_width > max_width:
                     scale_factor = min(max_height / img_height, max_width / img_width)
@@ -491,7 +486,6 @@ class TomographyApp(tk.Tk):
                     new_width = int(img_width * scale_factor)
                     self.default_image = resize(self.default_image, (new_height, new_width))
 
-                # Convert back to uint8 format if necessary
                 if self.default_image.dtype == np.float64:
                     self.default_image = img_as_ubyte(self.default_image)
 
