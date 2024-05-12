@@ -24,7 +24,7 @@ def radon_transform(image, scan_count, detector_count, angle_range, pad=True, pl
         image = circle_pad(image)
 
     center = center_of(image)
-    width = height = image.shape[0]
+    width = image.shape[0]
     radius = width // 2
     alphas = np.linspace(0, 180, scan_count)
     results = np.zeros((scan_count, detector_count))
@@ -54,13 +54,13 @@ def center_pad(array, shape, *args, **kwargs):
 
 
 def circle_pad(array, *args, **kwargs):
-    w, h = array.shape
+    if len(array.shape) == 3:  # Check if image is RGB
+        array = rgb2gray(array)  # Convert to grayscale
+    shape = array.shape
+    w, h = shape
     side = max(w, h)
     padded_array = center_pad(array, (side, side), *args, **kwargs)
     return padded_array
-
-
-
 
 def center_of(array):
     return np.floor(np.array(array.shape) / 2).astype(int)
@@ -79,11 +79,6 @@ def clip(array, min, max):
     array[array < min] = min
     array[array > max] = max
     return array
-
-
-def rmse(a, b):
-    a, b = rescale(a), rescale(b)
-    return np.sqrt(np.mean((a - b) ** 2))
 
 
 def cut_pad(img, height, width):
@@ -189,35 +184,30 @@ def inverse_radon(shape, sinogram, angle_range, pad=True, plot=False, filtering=
     return result
 
 
-
-
 def test(image, scans, detectors, angle_range, filtering, plot=False):
     padded = circle_pad(image)
     sinogram = radon_transform(padded, scans, detectors, angle_range, pad=False)
     output = inverse_radon(padded.shape, sinogram, angle_range, filtering=filtering, pad=False)
-    output = cut_pad(output, *image.shape)
+
     if plot:
-        fig, axs = plt.subplots(1, 2, figsize=(10, 10))
+        fig, axs = plt.subplots(1, 2, figsize=(10,10))
+
         axs[0].imshow(image, cmap='gray')
         axs[1].imshow(output, cmap='gray')
-    return output, rmse(image, output)
+    res = rmse(rgb2gray(image),output)
+    return output,res
+
+def filter_test(image, scans, detectors, angle_range):
+    y1, loss1 = test(image, scans, detectors, angle_range, filtering=False)
+    y2, loss2 = test(image, scans, detectors, angle_range, filtering=True)
+    return rmse(y1,y2)
 
 
-def test_filtering(image, scans=360, detectors=360, angle=270):
-    y1, loss1 = test(image, scans, detectors, angle, filtering=False)
-    y2, loss2 = test(image, scans, detectors, angle, filtering=True)
-    print(f'rmse no filtering  {loss1:.6f}')
-    print(f'rmse filtering     {loss2:.6f}')
-    fig, axs = plt.subplots(1, 3, figsize=(10, 10))
-    axs[0].imshow(image, cmap='gray')
-    axs[1].imshow(y1, cmap='gray')
-    axs[2].imshow(y2, cmap='gray')
 
 
 def read_dicom(path):
     from pydicom import dcmread
     ds = dcmread(path)
-    # assume dicom metadata identifiers are uppercase
     keys = {x for x in dir(ds) if x[0].isupper()} - {'PixelData'}
     meta = {x: getattr(ds, x) for x in keys}
     image = ds.pixel_array
@@ -277,6 +267,10 @@ def write_dicom(path, image, meta):
     fd.PixelData = (image * 255).astype(np.uint16).tobytes()
     fd.save_as(path)
 
+def rmse(a, b):
+    a, b = rescale(a), rescale(b)
+    return np.sqrt(np.mean((a - b)**2))
+
 class TomographyApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -312,6 +306,11 @@ class TomographyApp(tk.Tk):
         self.filtering_var.set(True)  # Default value is True
         self.filtering_checkbox = ttk.Checkbutton(self.controls_frame, text="Enable Filtering", variable=self.filtering_var)
         self.filtering_checkbox.pack(padx=10, pady=5)
+
+        self.test_button = ttk.Button(self.controls_frame, text="Test", command=self.perform_test)
+        self.test_button.pack(padx=10, pady=5)
+        self.test_filtering_button = ttk.Button(self.controls_frame, text="Test Filtering", command=self.perform_test_filtering)
+        self.test_filtering_button.pack(padx=10, pady=5)
 
         self.output_image_frame = ttk.LabelFrame(self.main_frame, text="Output Image")
         self.output_image_frame.grid(row=0, column=2, padx=10, pady=10)
@@ -359,6 +358,48 @@ class TomographyApp(tk.Tk):
         self.dicom_info_text = tk.Text(self.dicom_info_frame, height=10, width=50)
         self.dicom_info_text.grid(row=0, column=1, padx=5, pady=5)
 
+        self.controls_frame = ttk.LabelFrame(self.main_frame, text="Controls")
+        self.controls_frame.grid(row=4, column=1, padx=10, pady=10)
+
+        self.delta_alpha_label = ttk.Label(self.controls_frame, text="Step (∆α) for emitter/detector arrangement:")
+        self.delta_alpha_label.pack(padx=10, pady=5)
+        self.delta_alpha_entry = ttk.Entry(self.controls_frame)
+        self.delta_alpha_entry.pack(padx=10, pady=5)
+
+        self.detector_count_label = ttk.Label(self.controls_frame, text="Number of detectors (n) for one arrangement:")
+        self.detector_count_label.pack(padx=10, pady=5)
+        self.detector_count_entry = ttk.Entry(self.controls_frame)
+        self.detector_count_entry.pack(padx=10, pady=5)
+
+        self.angle_range_label = ttk.Label(self.controls_frame,
+                                           text="Angular range (l) for emitter/detector arrangement:")
+        self.angle_range_label.pack(padx=10, pady=5)
+        self.angle_range_entry = ttk.Entry(self.controls_frame)
+        self.angle_range_entry.pack(padx=10, pady=5)
+
+    def perform_test(self):
+        if self.default_image is None:
+            messagebox.showerror("Error", "Please load an image first.")
+            return
+
+        try:
+            output,loss = test(self.default_image, 360, 360, 270, self.filtering_var.get())
+            messagebox.showinfo("Test Result", f"RMSE: {loss:.6f}")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def perform_test_filtering(self):
+        if self.default_image is None:
+            messagebox.showerror("Error", "Please load an image first.")
+            return
+
+        filtering = self.filtering_var.get()
+
+        try:
+            loss = filter_test(self.default_image, 360, 360, 270)
+            messagebox.showinfo("Filtering Test Result", f"RMSE: {loss:.6f}")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 
     def load_dicom(self):
         file_path = filedialog.askopenfilename(title="Select DICOM Image", filetypes=[("DICOM files", "*.dcm")])
@@ -467,7 +508,22 @@ class TomographyApp(tk.Tk):
         filtering = self.filtering_var.get()
 
         try:
-            sinogram = radon_transform(self.default_image, 360, 360, 270, plot=False)
+            try:
+                delta_alpha = int(self.delta_alpha_entry.get())
+            except ValueError:
+                delta_alpha = 360
+
+            try:
+                detector_count = int(self.detector_count_entry.get())
+            except ValueError:
+                detector_count = 360
+
+            try:
+                angle_range = int(self.angle_range_entry.get())
+            except ValueError:
+                angle_range = 270
+
+            sinogram = radon_transform(self.default_image, delta_alpha, detector_count, angle_range, plot=False)
             if filtering:
                 sinogram_filtered = filter_sinogram(sinogram)
                 sinogram_rescaled = rescale(sinogram_filtered, min=0, max=255).astype(np.uint8)
@@ -482,9 +538,9 @@ class TomographyApp(tk.Tk):
 
         try:
             if filtering:
-                output_image = inverse_radon(self.default_image.shape, sinogram_filtered, 270, filtering=True)
+                output_image = inverse_radon(self.default_image.shape, sinogram_filtered, angle_range, filtering=True)
             else:
-                output_image = inverse_radon(self.default_image.shape, sinogram, 270, filtering=False)
+                output_image = inverse_radon(self.default_image.shape, sinogram, angle_range, filtering=False)
             output_image_rescaled = rescale(output_image, min=0, max=255).astype(np.uint8)
             padded_output_image = circle_pad(output_image_rescaled)
             output_image_tk = ImageTk.PhotoImage(image=Image.fromarray(padded_output_image))
@@ -497,12 +553,27 @@ class TomographyApp(tk.Tk):
 
 
     def reset_image(self):
-        self.default_image = None
-        self.input_image = None
+
         self.input_image_label.config(image=None)
-        self.sinogram_image_label.config(image=None)
-        self.output_image = None
+        self.input_image = None
+
         self.output_image_label.config(image=None)
+        self.output_image = None
+
+        self.sinogram_image_label.config(image=None)
+        self.sinogram_image = None
+
+        self.default_image = None
+
+        self.dicom_image_label.config(image=None)
+        self.dicom_info_text.delete(1.0, tk.END)
+        self.patient_name_entry.delete(0, tk.END)
+        self.patient_id_entry.delete(0, tk.END)
+        self.image_comments_entry.delete(0, tk.END)
+        self.study_date_entry.delete(0, tk.END)
+        self.delta_alpha_entry.delete(0, tk.END)
+        self.detector_count_entry.delete(0, tk.END)
+        self.angle_range_entry.delete(0, tk.END)
 
 
 def main():
