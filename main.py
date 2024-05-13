@@ -193,7 +193,13 @@ def test(image, scans, detectors, angle_range, filtering, plot=False):
 
         axs[0].imshow(image, cmap='gray')
         axs[1].imshow(output, cmap='gray')
-    res = rmse(rgb2gray(image),output)
+    output = resize(output, image.shape, anti_aliasing=True)
+
+    if len(image.shape) == 3:
+        image = rgb2gray(image)
+    if len(output.shape) == 3:
+        output = rgb2gray(output)
+    res = rmse(image,output)
     return output,res
 
 def filter_test(image, scans, detectors, angle_range):
@@ -276,7 +282,10 @@ class TomographyApp(tk.Tk):
 
         self.title("Tomography Simulator")
 
-        self.main_frame = ttk.Frame(self)
+        self.scrollable_frame = ScrollableFrame(self)
+        self.scrollable_frame.pack(fill="both", expand=True)
+
+        self.main_frame = ttk.Frame(self.scrollable_frame.scrollable_frame)
         self.main_frame.pack(padx=10, pady=10)
 
         self.input_image_frame = ttk.LabelFrame(self.main_frame, text="Input Image")
@@ -568,6 +577,27 @@ class TomographyApp(tk.Tk):
         self.delta_alpha_entry.delete(0, tk.END)
         self.detector_count_entry.delete(0, tk.END)
         self.angle_range_entry.delete(0, tk.END)
+
+class ScrollableFrame(tk.Frame):
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+
+        self.canvas = tk.Canvas(self)
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
 
 def main():
